@@ -1,0 +1,130 @@
+WITH main_data AS (
+         SELECT o.order_id,
+            o.date AS order_date,
+            date(o.date) AS dt,
+            s.name AS status,
+            divisions.divisions_lvl3,
+                CASE
+                    WHEN divisions.divisions_lvl3 = 'Отдел Оптовых продаж'::text THEN 'Отдел Оптовых продаж'::text
+                    WHEN marketplaces.marketplaces_name IS NOT NULL THEN marketplaces.marketplaces_name
+                    WHEN sptd.division ~~ 'Маркетплейсы'::text OR sptd.division IS NULL THEN 'Другое'::text
+                    ELSE sptd.division
+                END AS division,
+            cities.name AS city,
+            p.plan,
+            o.sales_sum,
+            o.discount_sum,
+            o.is_posted,
+            o.deletion_mark,
+            dn.is_cancel,
+            dn.quantity,
+            dn.sales_sum AS item_sales_sum,
+            nomenclatures.is_service,
+            dn.purchase_price AS item_purchase_price,
+            dn.quantity::double precision * dn.purchase_price AS cost_price
+           FROM dwh.orders o
+             LEFT JOIN dwh.deliveries ON deliveries.order_guid = o.guid
+             LEFT JOIN dwh.delivery_nomenclatures__v2 dn ON dn.delivery_guid = deliveries.guid
+             LEFT JOIN ( SELECT nomenclatures_1.guid AS nomenclatures_guid,
+                    nomenclatures_1.is_service
+                   FROM dwh.nomenclatures nomenclatures_1) nomenclatures ON dn.num_guid = nomenclatures.nomenclatures_guid
+             LEFT JOIN ( SELECT d1.guid AS divisions_guid,
+                    d1.name AS divisions_lvl3,
+                    d2.name AS divisions_lvl2,
+                    d3.name AS divisions_lvl1
+                   FROM dwh.divisions d1
+                     LEFT JOIN dwh.divisions d2 ON d2.guid = d1.parent_guid
+                     LEFT JOIN dwh.divisions d3 ON d2.parent_guid = d3.guid) divisions ON divisions.divisions_guid = o.division_guid
+             LEFT JOIN ( SELECT sptd_1.division,
+                    sptd_1.sales_point_guid
+                   FROM analytics.sales_point_to_division sptd_1) sptd ON sptd.sales_point_guid = divisions.divisions_guid
+             LEFT JOIN ( SELECT marketplaces_1.guid AS marketplaces_guid,
+                    marketplaces_1.name AS marketplaces_name
+                   FROM dwh.marketplaces marketplaces_1) marketplaces ON marketplaces.marketplaces_guid = o.marketplace_guid
+             LEFT JOIN dwh.cities cities ON cities.guid = o.city_guid
+             LEFT JOIN ( SELECT eso.guid,
+                    eso.name
+                   FROM dwh.enum_statuses_orders eso) s ON s.guid = o.status::uuid
+             LEFT JOIN ( SELECT plan24.date,
+                    plan24.division,
+                    sum(plan24.plan) AS plan
+                   FROM analytics.plan24
+                  WHERE plan24.plan_type::text = 'MIN'::text
+                  GROUP BY plan24.date, plan24.division) p ON p.date = o.date::date AND p.division::text =
+                CASE
+                    WHEN divisions.divisions_lvl3 = 'Отдел Оптовых продаж'::text THEN 'Отдел Оптовых продаж'::text
+                    WHEN marketplaces.marketplaces_name IS NOT NULL THEN marketplaces.marketplaces_name
+                    WHEN sptd.division ~~ '%Маркетплейсы%'::text OR sptd.division IS NULL THEN 'Другое'::text
+                    ELSE sptd.division
+                END
+          WHERE date(o.date) >= '2024-01-01'::date AND nomenclatures.is_service IS FALSE
+        ), aggregated_metrics AS (
+         SELECT main_data.dt,
+            main_data.order_date,
+            main_data.order_id,
+            main_data.divisions_lvl3,
+            main_data.division,
+            main_data.city,
+            main_data.status,
+            sum(
+                CASE
+                    WHEN (main_data.status <> ALL (ARRAY['Проект'::text, 'Отказ проекта'::text, 'Отказ'::text])) AND main_data.is_posted IS TRUE AND main_data.is_cancel IS FALSE THEN main_data.item_sales_sum
+                    ELSE 0::double precision
+                END) AS total_sales_sum,
+            sum(
+                CASE
+                    WHEN (main_data.status <> ALL (ARRAY['Проект'::text, 'Отказ проекта'::text, 'Отказ'::text])) AND main_data.is_posted IS TRUE AND main_data.is_cancel IS FALSE THEN main_data.item_sales_sum - main_data.cost_price
+                    ELSE 0::double precision
+                END) AS markup,
+            count(
+                CASE
+                    WHEN (main_data.status <> ALL (ARRAY['Проект'::text, 'Отказ проекта'::text, 'Отказ'::text])) AND main_data.is_posted IS TRUE AND main_data.is_cancel IS FALSE THEN main_data.order_id
+                    ELSE NULL::text
+                END) AS orders_count,
+            sum(
+                CASE
+                    WHEN (main_data.status <> ALL (ARRAY['Проект'::text, 'Отказ проекта'::text, 'Отказ'::text])) AND main_data.is_posted IS TRUE AND main_data.is_cancel IS FALSE THEN main_data.sales_sum
+                    ELSE 0::double precision
+                END) / NULLIF(count(
+                CASE
+                    WHEN (main_data.status <> ALL (ARRAY['Проект'::text, 'Отказ проекта'::text, 'Отказ'::text])) AND main_data.is_posted IS TRUE AND main_data.is_cancel IS FALSE THEN main_data.order_id
+                    ELSE NULL::text
+                END), 0)::double precision AS average_check,
+            sum(DISTINCT
+                CASE
+                    WHEN (main_data.status = ANY (ARRAY['Проект'::text, 'Отказ проекта'::text, 'Отказ'::text])) AND main_data.is_posted IS FALSE AND main_data.is_cancel IS TRUE THEN main_data.sales_sum
+                    ELSE 0::double precision
+                END) AS cancel_sales_sum,
+            count(DISTINCT
+                CASE
+                    WHEN (main_data.status = ANY (ARRAY['Проект'::text, 'Отказ проекта'::text, 'Отказ'::text])) AND main_data.is_posted IS FALSE AND main_data.is_cancel IS TRUE THEN main_data.order_id
+                    ELSE NULL::text
+                END) AS canceled_orders_sum,
+            max(
+                CASE
+                    WHEN (main_data.status <> ALL (ARRAY['Проект'::text, 'Отказ проекта'::text, 'Отказ'::text])) AND main_data.is_posted IS TRUE AND main_data.is_cancel IS FALSE THEN main_data.plan
+                    ELSE 0::real
+                END) AS plan_sum,
+                CASE
+                    WHEN (main_data.status <> ALL (ARRAY['Проект'::text, 'Отказ проекта'::text, 'Отказ'::text])) AND main_data.is_posted IS TRUE AND main_data.is_cancel IS FALSE THEN avg(main_data.quantity)
+                    ELSE 0::numeric
+                END AS average_items_per_check
+           FROM main_data
+          GROUP BY main_data.dt, main_data.order_date, main_data.order_id, main_data.divisions_lvl3, main_data.division, main_data.city, main_data.status, main_data.is_posted, main_data.is_cancel
+        )
+ SELECT dt,
+    order_date,
+    order_id,
+    divisions_lvl3,
+    division,
+    city,
+    status,
+    plan_sum,
+    total_sales_sum,
+    markup,
+    orders_count,
+    average_check,
+    cancel_sales_sum,
+    canceled_orders_sum,
+    average_items_per_check
+   FROM aggregated_metrics
