@@ -1,0 +1,23 @@
+SELECT o.date, o.order_id, o.is_posted, o.sales_sum, r.name, 
+                CASE
+                    WHEN divisions.divisions_lvl3 = 'Отдел Оптовых продаж'::text THEN 'Отдел Оптовых продаж'::text
+                    WHEN sptd.division ~~ 'Маркетплейсы'::text OR sptd.division IS NULL THEN 'Другое'::text
+                    ELSE sptd.division
+                END AS division, r.name
+FROM dwh.orders o  
+LEFT JOIN dwh.deliveries d ON o.guid = d.order_guid
+LEFT JOIN dwh.reasons_for_fails r ON d.refusal_guid = r.guid
+LEFT JOIN ( SELECT d1.guid AS divisions_guid,
+                    d1.name AS divisions_lvl3,
+                    d2.name AS divisions_lvl2,
+                    d3.name AS divisions_lvl1
+                   FROM dwh.divisions d1
+                     LEFT JOIN dwh.divisions d2 ON d2.guid = d1.parent_guid
+                     LEFT JOIN dwh.divisions d3 ON d2.parent_guid = d3.guid) divisions ON divisions.divisions_guid = o.division_guid
+LEFT JOIN ( SELECT sptd_1.division,
+                    sptd_1.sales_point_guid
+                   FROM analytics.sales_point_to_division sptd_1) sptd ON sptd.sales_point_guid = divisions.divisions_guid
+
+WHERE date(o.date) = '2024-11-10'::date AND o.sales_sum > 100000 AND o.status IN ('38ffbe6f-787a-46fb-9833-851041221d30','0ac50647-1c38-4e4c-9259-947603e83055','1d3aed43-212f-4e15-a9d4-66fa811a5f72')
+AND division IN  ('Интернет магазин', 'Розница')
+ORDER BY sales_sum desc
