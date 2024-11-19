@@ -1,0 +1,340 @@
+WITH cte_category_nom_new AS (
+         SELECT category_nom.guid AS category_guid,
+            category_nom.name AS first_name,
+            c1.name AS second_name,
+            c2.name AS third_name,
+            c3.name AS fourth_name,
+            c4.name AS fifth_name
+           FROM dwh.category_nom
+             LEFT JOIN dwh.category_nom c1 ON category_nom.parent_guid = c1.guid
+             LEFT JOIN dwh.category_nom c2 ON c1.parent_guid = c2.guid
+             LEFT JOIN dwh.category_nom c3 ON c2.parent_guid = c3.guid
+             LEFT JOIN dwh.category_nom c4 ON c3.parent_guid = c4.guid
+        ), cte_main_query AS (
+         SELECT t1.order_dt,
+            t1.order_id,
+            t1.division,
+            t1.department,
+            t1.combinated_num_guid,
+            t1.combinated_char_guid,
+            t1.nomen_char_guid,
+            q.article AS complect_article,
+            t1.nomen_article,
+            ch.article AS char_article,
+            t1.complect_id,
+            t1.nomen_name,
+            t1.first_reserve_cat,
+            t1.second_reserve_cat,
+            t1.manufacturer_name,
+            t1.is_return,
+            t1.purchase_price,
+            t1.sales_sum,
+            t1.not_complect_quantity,
+            t1.complect_quantity,
+                CASE
+                    WHEN characteristics.article IS NULL THEN q.article
+                    WHEN characteristics.article IS NOT NULL THEN characteristics.article
+                    ELSE NULL::text
+                END AS full_article
+           FROM ( SELECT date(orders.date) AS order_dt,
+                    orders.order_id,
+                        CASE
+                            WHEN orders.is_opt IS TRUE THEN 'Отдел оптовых продаж'::text
+                            ELSE sales_point_to_division.division
+                        END AS division,
+                        CASE
+                            WHEN delivery_nomenclatures__v2.c_num_guid = '00000000-0000-0000-0000-000000000000'::uuid THEN delivery_nomenclatures__v2.num_guid
+                            WHEN delivery_nomenclatures__v2.c_num_guid <> '00000000-0000-0000-0000-000000000000'::uuid THEN delivery_nomenclatures__v2.c_num_guid
+                            ELSE delivery_nomenclatures__v2.num_guid
+                        END AS combinated_num_guid,
+                        CASE
+                            WHEN delivery_nomenclatures__v2.c_num_guid <> '00000000-0000-0000-0000-000000000000'::uuid THEN delivery_nomenclatures__v2.c_char_guid
+                            WHEN delivery_nomenclatures__v2.c_num_guid = '00000000-0000-0000-0000-000000000000'::uuid THEN delivery_nomenclatures__v2.char_guid
+                            ELSE NULL::uuid
+                        END AS combinated_char_guid,
+                        CASE
+                            WHEN sales_point_to_division.sales_point_guid = ANY (ARRAY['0c8dfca3-3b80-11ef-93d8-3cecef887aa7'::uuid, 'cc64169d-1694-11ef-93d6-3cecef887aa7'::uuid]) THEN 'МК'::text
+                            WHEN sales_point_to_division.sales_point_guid = ANY (ARRAY['316d8018-121c-11ef-93d6-3cecef887aa7'::uuid, '15066ec1-435e-11ef-93d8-3cecef887aa7'::uuid]) THEN 'Корпус'::text
+                            ELSE NULL::text
+                        END AS department,
+                    delivery_nomenclatures__v2.char_guid AS nomen_char_guid,
+                    delivery_nomenclatures__v2.complect_id,
+                    nomenclatures.article AS nomen_article,
+                    nomenclatures.name AS nomen_name,
+                        CASE
+                            WHEN cte_category_nom_new.fifth_name = 'Кухни'::text THEN 'Кухни'::text
+                            ELSE cte_category_nom_new.fourth_name
+                        END AS first_reserve_cat,
+                    cte_category_nom_new.third_name AS second_reserve_cat,
+                    manufacturers.name AS manufacturer_name,
+                    delivery_nomenclatures__v2.is_return,
+                        CASE
+                            WHEN delivery_nomenclatures__v2.is_return IS TRUE THEN delivery_nomenclatures__v2.purchase_price * '-1'::integer::double precision
+                            WHEN delivery_nomenclatures__v2.is_return IS FALSE THEN delivery_nomenclatures__v2.purchase_price
+                            ELSE NULL::double precision
+                        END AS purchase_price,
+                    round(delivery_nomenclatures__v2.sales_sum::numeric, 0) AS sales_sum,
+                        CASE
+                            WHEN delivery_nomenclatures__v2.complect_quantity::numeric = 0::numeric THEN delivery_nomenclatures__v2.quantity
+                            ELSE NULL::bigint
+                        END AS not_complect_quantity,
+                        CASE
+                            WHEN delivery_nomenclatures__v2.complect_quantity::numeric > 0::numeric AND delivery_nomenclatures__v2.is_return IS TRUE THEN delivery_nomenclatures__v2.complect_quantity::numeric * '-1'::integer::numeric
+                            WHEN delivery_nomenclatures__v2.complect_quantity::numeric > 0::numeric AND delivery_nomenclatures__v2.is_return IS FALSE THEN delivery_nomenclatures__v2.complect_quantity::numeric
+                            WHEN delivery_nomenclatures__v2.complect_quantity::numeric < 0::numeric AND delivery_nomenclatures__v2.is_return IS TRUE THEN delivery_nomenclatures__v2.complect_quantity::numeric
+                            ELSE NULL::numeric
+                        END AS complect_quantity
+                   FROM dwh.orders
+                     LEFT JOIN dwh.deliveries ON orders.guid = deliveries.order_guid
+                     LEFT JOIN dwh.delivery_nomenclatures__v2 ON deliveries.guid = delivery_nomenclatures__v2.delivery_guid
+                     LEFT JOIN dwh.nomenclatures ON delivery_nomenclatures__v2.num_guid = nomenclatures.guid
+                     LEFT JOIN dwh.manufacturers ON nomenclatures.manufacturer_guid = manufacturers.guid
+                     LEFT JOIN dwh.category_nom ON nomenclatures.category_guid = category_nom.guid
+                     LEFT JOIN dwh.divisions ON orders.division_guid = divisions.guid
+                     LEFT JOIN dwh.cities ON orders.city_guid = cities.guid
+                     LEFT JOIN analytics.sales_point_to_division ON divisions.guid = sales_point_to_division.sales_point_guid
+                     LEFT JOIN cte_category_nom_new ON nomenclatures.category_guid = cte_category_nom_new.category_guid
+                  WHERE orders.deletion_mark IS FALSE AND orders.is_posted IS TRUE AND delivery_nomenclatures__v2.is_cancel IS FALSE AND delivery_nomenclatures__v2.__deleted IS FALSE AND nomenclatures.is_service IS FALSE AND nomenclatures.deletion_mark IS FALSE AND nomenclatures.__deleted IS FALSE AND (orders.status <> ALL (ARRAY['38ffbe6f-787a-46fb-9833-851041221d30'::text, '0ac50647-1c38-4e4c-9259-947603e83055'::text, '1d3aed43-212f-4e15-a9d4-66fa811a5f72'::text])) AND (sales_point_to_division.sales_point_guid = ANY (ARRAY['0c8dfca3-3b80-11ef-93d8-3cecef887aa7'::uuid, 'cc64169d-1694-11ef-93d6-3cecef887aa7'::uuid, '316d8018-121c-11ef-93d6-3cecef887aa7'::uuid, '15066ec1-435e-11ef-93d8-3cecef887aa7'::uuid]))) t1
+             LEFT JOIN ( SELECT nomenclatures.guid,
+                    nomenclatures.deletion_mark,
+                    nomenclatures.parent_guid,
+                    nomenclatures.is_folder,
+                    nomenclatures.article,
+                    nomenclatures.name,
+                    nomenclatures.is_active,
+                    nomenclatures.to_site,
+                    nomenclatures.partner_guid,
+                    nomenclatures.is_service,
+                    nomenclatures.manufacturer_guid,
+                    nomenclatures.unit,
+                    nomenclatures.is_complect,
+                    nomenclatures.category_guid,
+                    nomenclatures.weight,
+                    nomenclatures.volume,
+                    nomenclatures.volume_weight,
+                    nomenclatures.num_of_packages,
+                    nomenclatures.is_characteristics,
+                    nomenclatures.is_modular,
+                    nomenclatures.comment,
+                    nomenclatures.width,
+                    nomenclatures.height,
+                    nomenclatures.depth,
+                    nomenclatures.is_package,
+                    nomenclatures.is_detail,
+                    nomenclatures.is_glass,
+                    nomenclatures.is_warehouse_programm,
+                    nomenclatures.is_not_sale,
+                    nomenclatures.price_group_guid,
+                    nomenclatures.__received_at,
+                    nomenclatures.__stored_at,
+                    nomenclatures.__loaded_at,
+                    nomenclatures.__source,
+                    nomenclatures.version,
+                    nomenclatures.predefined_id,
+                    nomenclatures.only_from_stock,
+                    nomenclatures.note_general,
+                    nomenclatures.note_assembly,
+                    nomenclatures.note_lifting,
+                    nomenclatures.note_delivery,
+                    nomenclatures.partner_nomen_guid,
+                    nomenclatures.partner_characteristic_guid,
+                    nomenclatures.is_manual_prices,
+                    nomenclatures.creation_date,
+                    nomenclatures.is_new,
+                    nomenclatures.item_width,
+                    nomenclatures.item_height,
+                    nomenclatures.item_depth,
+                    nomenclatures.name_for_printing,
+                    nomenclatures.__changed_at,
+                    nomenclatures.__deleted
+                   FROM dwh.nomenclatures
+                  WHERE nomenclatures.is_service IS FALSE AND nomenclatures.deletion_mark IS FALSE) q ON t1.combinated_num_guid = q.guid
+             LEFT JOIN dwh.characteristics ON t1.combinated_char_guid = characteristics.guid
+             LEFT JOIN dwh.characteristics ch ON t1.nomen_char_guid = ch.guid
+        ), cte_reserve_cat AS (
+         SELECT DISTINCT cte_main_query.full_article,
+            cte_main_query.first_reserve_cat,
+            cte_main_query.second_reserve_cat
+           FROM cte_main_query
+          WHERE cte_main_query.first_reserve_cat IS NOT NULL AND cte_main_query.second_reserve_cat IS NOT NULL
+        ), cte_bitrix_appeals AS (
+         SELECT t1.rnk,
+            t1.date_create,
+            t1.order_id,
+            t1.client_comment
+           FROM ( SELECT row_number() OVER (PARTITION BY bitrix24_crm_deals.order_id ORDER BY bitrix24_crm_deals.date_create) AS rnk,
+                    bitrix24_crm_deals.date_create,
+                    bitrix24_crm_deals.order_id,
+                    bitrix24_crm_deals.client_comment
+                   FROM analytics.bitrix24_crm_deals
+                  WHERE bitrix24_crm_deals.order_id::text <> '0'::text AND bitrix24_crm_deals.date_create >= '2024-07-01'::date) t1
+          WHERE t1.rnk = 1
+        ), cte_returns AS (
+         SELECT cte_main_query.order_dt,
+            cte_main_query.order_id,
+            cte_main_query.department,
+            cte_main_query.full_article,
+            cte_main_query.is_return,
+            abs(cte_main_query.sales_sum) AS sales_sum
+           FROM cte_main_query
+          WHERE cte_main_query.is_return IS TRUE
+        ), cte_complect_counts AS (
+         SELECT t1.order_dt,
+            t1.order_id,
+            t1.full_article,
+            sum(t1.complect_quantity) AS complect_quantity
+           FROM ( SELECT cte_main_query.order_dt,
+                    cte_main_query.order_id,
+                    cte_main_query.full_article,
+                    cte_main_query.complect_quantity
+                   FROM cte_main_query
+                  WHERE cte_main_query.complect_quantity IS NOT NULL
+                  GROUP BY cte_main_query.order_dt, cte_main_query.order_id, cte_main_query.full_article, cte_main_query.complect_quantity) t1
+          GROUP BY t1.order_dt, t1.order_id, t1.full_article
+        ), cte_item_categories AS (
+         SELECT item_categories.article,
+            item_categories.item_name,
+            item_categories.category_lvl_1,
+            item_categories.category_lvl_2,
+            item_categories.category_lvl_3,
+            item_categories.category_lvl_4,
+            item_categories.manufacturer AS manufacturer_name
+           FROM analytics.item_categories
+          GROUP BY item_categories.article, item_categories.item_name, item_categories.category_lvl_1, item_categories.category_lvl_2, item_categories.category_lvl_3, item_categories.category_lvl_4, item_categories.manufacturer
+        ), cte_purchase_prices AS (
+         SELECT cte_main_query.order_dt,
+            cte_main_query.order_id,
+            cte_main_query.full_article,
+            sum(cte_main_query.purchase_price) AS purchase_price
+           FROM cte_main_query
+          GROUP BY cte_main_query.order_dt, cte_main_query.order_id, cte_main_query.full_article
+        ), cte_final_table AS (
+         SELECT t2.order_dt,
+            t2.order_id,
+            t2.division,
+            t2.department,
+            t2.full_article,
+            t2.sales_sum,
+            t2.not_complect_quantity,
+            cte_complect_counts.complect_quantity
+           FROM ( SELECT t1.order_dt,
+                    t1.order_id,
+                    t1.division,
+                    t1.department,
+                    t1.full_article,
+                    sum(t1.sales_sum) AS sales_sum,
+                    sum(t1.not_complect_quantity) AS not_complect_quantity
+                   FROM ( SELECT cte_main_query.order_dt,
+                            cte_main_query.order_id,
+                            cte_main_query.division,
+                            cte_main_query.department,
+                            cte_main_query.full_article,
+                            cte_main_query.is_return,
+                            cte_main_query.sales_sum,
+                            cte_main_query.not_complect_quantity
+                           FROM cte_main_query) t1
+                  GROUP BY t1.order_dt, t1.order_id, t1.division, t1.department, t1.full_article) t2
+             LEFT JOIN cte_complect_counts USING (order_dt, order_id, full_article)
+        ), cte_result_query AS (
+         SELECT t1.order_dt,
+            t1.order_id,
+            t1.full_article,
+            t1.division_name,
+            t1.department,
+            t1.item_category_1,
+            t1.item_category_2,
+            t1.item_category_3,
+            t1.item_category_4,
+            t1.manufacturer_name,
+            t1.item_name,
+            t1.composite_quantity,
+            t1.purchase_price,
+            t1.sales_sum,
+            t1.purchase_price * t1.composite_quantity::double precision AS cost_price
+           FROM ( SELECT cte_final_table.order_dt,
+                    cte_final_table.order_id,
+                    cte_final_table.full_article,
+                    cte_final_table.division AS division_name,
+                    cte_final_table.department,
+                        CASE
+                            WHEN cte_item_categories.category_lvl_1 IS NULL THEN cte_reserve_cat.first_reserve_cat::character varying
+                            ELSE cte_item_categories.category_lvl_1
+                        END AS item_category_1,
+                        CASE
+                            WHEN cte_item_categories.category_lvl_2 IS NULL THEN cte_reserve_cat.second_reserve_cat::character varying
+                            ELSE cte_item_categories.category_lvl_2
+                        END AS item_category_2,
+                    cte_item_categories.category_lvl_3 AS item_category_3,
+                    cte_item_categories.category_lvl_4 AS item_category_4,
+                        CASE
+                            WHEN cte_item_categories.manufacturer_name IS NOT NULL THEN cte_item_categories.manufacturer_name
+                            WHEN cte_item_categories.manufacturer_name IS NULL THEN manufacturers.name::character varying
+                            ELSE NULL::character varying
+                        END AS manufacturer_name,
+                        CASE
+                            WHEN cte_item_categories.item_name IS NOT NULL THEN cte_item_categories.item_name
+                            WHEN cte_item_categories.item_name IS NULL THEN nomenclatures.name::character varying
+                            ELSE NULL::character varying
+                        END AS item_name,
+                        CASE
+                            WHEN cte_final_table.not_complect_quantity IS NULL THEN cte_final_table.complect_quantity
+                            ELSE cte_final_table.not_complect_quantity
+                        END AS composite_quantity,
+                    cte_purchase_prices.purchase_price,
+                    cte_final_table.sales_sum
+                   FROM cte_final_table
+                     LEFT JOIN cte_item_categories ON cte_final_table.full_article = cte_item_categories.article::text
+                     LEFT JOIN cte_purchase_prices ON cte_final_table.order_dt = cte_purchase_prices.order_dt AND cte_final_table.full_article = cte_purchase_prices.full_article AND cte_final_table.order_id = cte_purchase_prices.order_id
+                     LEFT JOIN cte_reserve_cat ON cte_final_table.full_article = cte_reserve_cat.full_article
+                     LEFT JOIN dwh.nomenclatures ON cte_final_table.full_article = nomenclatures.article
+                     LEFT JOIN dwh.manufacturers ON nomenclatures.manufacturer_guid = manufacturers.guid) t1
+        )
+ SELECT cte_result_query.order_dt,
+    cte_result_query.order_id,
+    cte_result_query.department,
+    cte_result_query.full_article,
+    cte_result_query.item_name,
+    cte_result_query.manufacturer_name,
+    cities.name,
+ 		CASE
+            WHEN divisions.divisions_lvl3 = 'Отдел Оптовых продаж'::text THEN 'Отдел Оптовых продаж'::text
+            WHEN marketplaces.marketplaces_name IS NOT NULL THEN marketplaces.marketplaces_name
+            WHEN sptd.division ~~ 'Маркетплейсы'::text OR sptd.division IS NULL THEN 'Другое'::text
+            ELSE sptd.division
+        END AS division,    
+  		CASE
+            WHEN cte_result_query.item_category_1 IS NULL AND cte_result_query.department = 'МК'::text THEN 'Мебель'::character varying
+            ELSE cte_result_query.item_category_1
+        END AS item_category_1,
+        CASE
+            WHEN cte_result_query.item_category_2 IS NULL AND cte_result_query.department = 'МК'::text THEN 'Кухня'::character varying
+            WHEN cte_result_query.item_category_2::text = 'Модульная кухня'::text THEN 'Кухня'::character varying
+            WHEN cte_result_query.item_category_2::text = 'Аксессуары к кухням (ПАПКА!)'::text THEN 'Аксессуары к кухням'::character varying
+            ELSE cte_result_query.item_category_2
+        END AS item_category_2,
+    cte_result_query.item_category_3,
+    cte_result_query.item_category_4,
+    cte_result_query.cost_price,
+    cte_result_query.sales_sum,
+    cte_result_query.composite_quantity,
+    cte_returns.is_return,
+    cte_returns.sales_sum AS return_sum,
+    cte_bitrix_appeals.client_comment AS reason_for_return
+   FROM cte_result_query
+     LEFT JOIN cte_returns USING (order_dt, order_id, department, full_article)
+     LEFT JOIN cte_bitrix_appeals USING (order_id)
+     LEFT JOIN dwh.orders o USING (order_id)
+     LEFT JOIN dwh.cities ON cities.guid = o.city_guid
+     LEFT JOIN  (SELECT d1.guid AS divisions_guid,
+                    d1.name AS divisions_lvl3,
+                    d2.name AS divisions_lvl2,
+                    d3.name AS divisions_lvl1
+                   FROM dwh.divisions d1
+                     LEFT JOIN dwh.divisions d2 ON d2.guid = d1.parent_guid
+                     LEFT JOIN dwh.divisions d3 ON d2.parent_guid = d3.guid) divisions ON divisions.divisions_guid = o.division_guid
+             LEFT JOIN ( SELECT sptd_1.division,
+                    sptd_1.sales_point_guid
+                   FROM analytics.sales_point_to_division sptd_1) sptd ON sptd.sales_point_guid = divisions.divisions_guid
+             LEFT JOIN ( SELECT marketplaces_1.guid AS marketplaces_guid,
+                    marketplaces_1.name AS marketplaces_name
+                   FROM dwh.marketplaces marketplaces_1) marketplaces ON marketplaces.marketplaces_guid = o.marketplace_guid
