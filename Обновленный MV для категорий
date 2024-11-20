@@ -1,4 +1,4 @@
-WITH cte_category_nom_new AS (
+ WITH cte_category_nom_new AS (
          SELECT category_nom.guid AS category_guid,
             category_nom.name AS first_name,
             c1.name AS second_name,
@@ -90,11 +90,11 @@ WITH cte_category_nom_new AS (
                      LEFT JOIN dwh.nomenclatures ON delivery_nomenclatures__v2.num_guid = nomenclatures.guid
                      LEFT JOIN dwh.manufacturers ON nomenclatures.manufacturer_guid = manufacturers.guid
                      LEFT JOIN dwh.category_nom ON nomenclatures.category_guid = category_nom.guid
-                     LEFT JOIN dwh.divisions ON orders.division_guid = divisions.guid
-                     LEFT JOIN dwh.cities ON orders.city_guid = cities.guid
-                     LEFT JOIN analytics.sales_point_to_division ON divisions.guid = sales_point_to_division.sales_point_guid
+                     LEFT JOIN dwh.divisions divisions_1 ON orders.division_guid = divisions_1.guid
+                     LEFT JOIN dwh.cities cities_1 ON orders.city_guid = cities_1.guid
+                     LEFT JOIN analytics.sales_point_to_division ON divisions_1.guid = sales_point_to_division.sales_point_guid
                      LEFT JOIN cte_category_nom_new ON nomenclatures.category_guid = cte_category_nom_new.category_guid
-                  WHERE orders.deletion_mark IS FALSE AND orders.is_posted IS TRUE AND delivery_nomenclatures__v2.is_cancel IS FALSE AND delivery_nomenclatures__v2.__deleted IS FALSE AND nomenclatures.is_service IS FALSE AND nomenclatures.deletion_mark IS FALSE AND nomenclatures.__deleted IS FALSE AND (orders.status <> ALL (ARRAY['38ffbe6f-787a-46fb-9833-851041221d30'::text, '0ac50647-1c38-4e4c-9259-947603e83055'::text, '1d3aed43-212f-4e15-a9d4-66fa811a5f72'::text])) AND (sales_point_to_division.sales_point_guid = ANY (ARRAY['0c8dfca3-3b80-11ef-93d8-3cecef887aa7'::uuid, 'cc64169d-1694-11ef-93d6-3cecef887aa7'::uuid, '316d8018-121c-11ef-93d6-3cecef887aa7'::uuid, '15066ec1-435e-11ef-93d8-3cecef887aa7'::uuid]))) t1
+                  WHERE orders.deletion_mark IS FALSE AND orders.is_posted IS TRUE AND delivery_nomenclatures__v2.is_cancel IS FALSE AND delivery_nomenclatures__v2.__deleted IS FALSE AND nomenclatures.is_service IS FALSE AND nomenclatures.deletion_mark IS FALSE AND nomenclatures.__deleted IS FALSE AND (orders.status <> ALL (ARRAY['38ffbe6f-787a-46fb-9833-851041221d30'::text, '0ac50647-1c38-4e4c-9259-947603e83055'::text, '1d3aed43-212f-4e15-a9d4-66fa811a5f72'::text])) AND (sales_point_to_division.division = ANY (ARRAY['Розница'::text, 'Интернет магазин'::text]))) t1
              LEFT JOIN ( SELECT nomenclatures.guid,
                     nomenclatures.deletion_mark,
                     nomenclatures.parent_guid,
@@ -296,13 +296,13 @@ WITH cte_category_nom_new AS (
     cte_result_query.item_name,
     cte_result_query.manufacturer_name,
     cities.name,
- 		CASE
+        CASE
             WHEN divisions.divisions_lvl3 = 'Отдел Оптовых продаж'::text THEN 'Отдел Оптовых продаж'::text
             WHEN marketplaces.marketplaces_name IS NOT NULL THEN marketplaces.marketplaces_name
             WHEN sptd.division ~~ 'Маркетплейсы'::text OR sptd.division IS NULL THEN 'Другое'::text
             ELSE sptd.division
-        END AS division,    
-  		CASE
+        END AS division,
+        CASE
             WHEN cte_result_query.item_category_1 IS NULL AND cte_result_query.department = 'МК'::text THEN 'Мебель'::character varying
             ELSE cte_result_query.item_category_1
         END AS item_category_1,
@@ -325,16 +325,16 @@ WITH cte_category_nom_new AS (
      LEFT JOIN cte_bitrix_appeals USING (order_id)
      LEFT JOIN dwh.orders o USING (order_id)
      LEFT JOIN dwh.cities ON cities.guid = o.city_guid
-     LEFT JOIN  (SELECT d1.guid AS divisions_guid,
-                    d1.name AS divisions_lvl3,
-                    d2.name AS divisions_lvl2,
-                    d3.name AS divisions_lvl1
-                   FROM dwh.divisions d1
-                     LEFT JOIN dwh.divisions d2 ON d2.guid = d1.parent_guid
-                     LEFT JOIN dwh.divisions d3 ON d2.parent_guid = d3.guid) divisions ON divisions.divisions_guid = o.division_guid
-             LEFT JOIN ( SELECT sptd_1.division,
-                    sptd_1.sales_point_guid
-                   FROM analytics.sales_point_to_division sptd_1) sptd ON sptd.sales_point_guid = divisions.divisions_guid
-             LEFT JOIN ( SELECT marketplaces_1.guid AS marketplaces_guid,
-                    marketplaces_1.name AS marketplaces_name
-                   FROM dwh.marketplaces marketplaces_1) marketplaces ON marketplaces.marketplaces_guid = o.marketplace_guid
+     LEFT JOIN ( SELECT d1.guid AS divisions_guid,
+            d1.name AS divisions_lvl3,
+            d2.name AS divisions_lvl2,
+            d3.name AS divisions_lvl1
+           FROM dwh.divisions d1
+             LEFT JOIN dwh.divisions d2 ON d2.guid = d1.parent_guid
+             LEFT JOIN dwh.divisions d3 ON d2.parent_guid = d3.guid) divisions ON divisions.divisions_guid = o.division_guid
+     LEFT JOIN ( SELECT sptd_1.division,
+            sptd_1.sales_point_guid
+           FROM analytics.sales_point_to_division sptd_1) sptd ON sptd.sales_point_guid = divisions.divisions_guid
+     LEFT JOIN ( SELECT marketplaces_1.guid AS marketplaces_guid,
+            marketplaces_1.name AS marketplaces_name
+           FROM dwh.marketplaces marketplaces_1) marketplaces ON marketplaces.marketplaces_guid = o.marketplace_guid
